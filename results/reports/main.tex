@@ -1,0 +1,523 @@
+\documentclass[letterpaper]{article}
+\usepackage{aaai2026}
+\usepackage{times}
+\usepackage{helvet}
+\usepackage{courier}
+\usepackage[hyphens]{url}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{booktabs}
+
+\title{Reproducing ``Data Augmentation for Electrocardiograms'' Using the MIT-BIH Arrhythmia Dataset}
+
+\author{
+    Min Kue Kim (minkuek2)
+}
+\affiliations{
+    University of Illinois Urbana-Champaign\\
+    \texttt{minkuek2@illinois.edu}
+}
+
+\begin{document}
+\maketitle
+
+
+% ---------------------------
+% ABSTRACT
+% ---------------------------
+\begin{abstract}
+This report presents a reproduction study of the paper
+\textit{``Data Augmentation for Electrocardiograms''} by Raghu et al.
+We re-implement a baseline convolutional classifier, apply several ECG-specific
+augmentation techniques, and evaluate their impact on arrhythmia classification
+performance using the MIT-BIH Arrhythmia dataset.
+Our reproduction results generally align with the trends reported in the paper,
+though some augmentation types—particularly time-warping—proved less effective
+in practice.
+
+\vspace{1em}
+
+\noindent Code Repository: \url{https://github.com/minkuek2/DL4H-Fall2025} \\
+\noindent Pyhealth PR: \url{https://github.com/sunlabuiuc/PyHealth/pull/703} \\
+\noindent Presentation Video: \\\url{https://mediaspace.illinois.edu/media/t/1_hxgw3wdy}
+\vspace{1em}
+
+\end{abstract}
+
+% ---------------------------
+\section{Introduction}
+
+The paper \textit{``Data Augmentation for Electrocardiograms''} proposes several
+waveform-based transformations—such as jitter, scaling, time-warping, and
+magnitude-warping—to improve generalization in arrhythmia classification
+tasks~\cite{raghu2022ecg}. Raghu et al.\ show that these augmentations can
+enhance the performance of convolutional neural networks on ECG benchmarks,
+including MIT-BIH and PTB-XL.
+
+In this reproduction study, we re-implement the core augmentation methods and
+baseline classifier described in the paper, applying them to the MIT-BIH
+Arrhythmia dataset (Kaggle version). Our goal is to evaluate whether the trends
+reported by the authors hold under a controlled reproduction environment.
+
+\subsection{Scope of Reproducibility}
+We reproduce:
+
+\begin{itemize}
+    \item Dataset preprocessing (normalization, splitting)
+    \item Baseline 1D CNN classifier
+    \item Augmentation functions: jitter, scaling, jitter+scaling, magnitude-warp, time-warp
+    \item Evaluation metrics: accuracy, loss, augmentation comparison
+\end{itemize}
+
+
+
+% ---------------------------
+\section{Methodology}
+
+\subsection{Environment}
+Python 3.12, Google Colab (T4 GPU), PyTorch 2.x\\
+Training time: ~20 minutes.\\
+Baseline trained for 20 epochs; augmentations for 5 epochs due to compute limits.
+
+\paragraph{Dependencies.}
+The reproduction study was implemented using the following core dependencies:
+
+\begin{itemize}
+    \item Python 3.12 (Google Colab default)
+    \item PyTorch (torch, torch.nn, torch.utils.data)
+    \item NumPy (numpy)
+    \item Pandas (pandas)
+    \item SciPy Interpolation Module (scipy.interpolate) \\
+    \quad -- used specifically for implementing magnitude warp and time warp augmentations
+\end{itemize}
+
+\subsection{Data}
+We use the MIT-BIH Arrhythmia dataset available on Kaggle.  
+Each sample contains:
+
+\begin{itemize}
+    \item 187 ECG values
+    \item 1 class label (0--4)
+\end{itemize}
+
+Signals are normalized to zero mean / unit variance.  
+The dataset was split into train, validation, and test sets using consistent random seeds.
+
+\subsection{Data Download Instructions}
+
+The MIT-BIH Arrhythmia dataset used in this reproduction study was obtained from
+the publicly available Kaggle version. It contains two CSV files,
+\texttt{mitbih\_train.csv} and \texttt{mitbih\_test.csv}, each with 187 ECG
+samples and one class label.
+
+\begin{enumerate}
+    \item Download the dataset from Kaggle: \\
+    \url{https://www.kaggle.com/datasets/shayanfazeli/heartbeat}
+
+    \item Extract and upload the two CSV files into the repo: \\
+
+    \item Extract and place the two CSV files into:
+    \texttt{./data/}
+    \item Verify the dataset path in Colab:
+    \texttt{!ls ./data}
+
+    \item Load the dataset via the custom PyTorch dataset class:
+\begin{verbatim}
+from dataset import MITBIHArrhythmiaDataset
+
+train_ds = 
+MITBIHArrhythmiaDataset(train_csv)
+test_ds  = 
+MITBIHArrhythmiaDataset(test_csv)
+\end{verbatim}
+\end{enumerate}
+
+These steps reproduce the exact data preparation pipeline used for all
+experiments.
+
+% ---------------------------
+\subsection{Data Exploration}
+
+Before training any model, we performed an exploratory analysis of the
+MIT-BIH Arrhythmia dataset. Although the Kaggle version provides already
+segmented 187-length heartbeat windows, the class distribution is
+highly imbalanced:
+
+\begin{itemize}
+    \item Class 0 (Normal): ~80\%
+    \item Class 1: ~9\%
+    \item Class 2: ~6\%
+    \item Class 3: ~2\%
+    \item Class 4: ~3\%
+\end{itemize}
+
+We visualized random ECG segments from each class (Appendix) and observed
+that morphology varies subtly across classes. We also inspected signal
+statistics such as mean amplitude, variance, and min/max values. This helped
+verify that normalization stabilizes the waveform range and ensures the CNN
+can learn consistent temporal patterns.
+
+These exploratory checks also helped confirm that augmentation methods such as
+jitter and scaling preserve clinically meaningful structure, whereas
+time-warping occasionally distorts QRS morphology, which may explain poor
+performance in our experiments.
+
+\subsubsection{LLM Assistance for Data Processing}
+
+A large language model (ChatGPT) was used to help generate initial data-loading
+and preprocessing code. The first prompt used was:
+
+\textit{``Explain how to load and preprocess the MIT-BIH Arrhythmia dataset for a CNN model.''}
+
+The LLM correctly identified the Kaggle dataset format (187 features + 1 label)
+and proposed a PyTorch Dataset class. The initial output required only minor
+modifications, such as adding \texttt{unsqueeze(0)} to match Conv1D input shape.
+A total of 2--3 prompts were used to finalize the dataset code. The LLM’s guidance
+significantly accelerated implementation and helped ensure clean preprocessing.
+
+\subsection{Original Paper Repository}
+
+The original \textit{``Data Augmentation for Electrocardiograms''} paper does not
+provide an official code repository. As a result, all model architectures and
+augmentation implementations were reproduced from descriptions in the paper, with
+assistance from an LLM to ensure consistency with common ECG-CNN baselines.
+
+\subsection{Model}
+
+Our baseline reproduces the simple CNN-style architecture used in prior ECG
+augmentation work:
+
+\begin{itemize}
+    \item Conv1D → ReLU → MaxPool
+    \item Conv1D → ReLU → MaxPool
+    \item Fully connected layers
+\end{itemize}
+
+The model is trained using Adam (lr=0.001) and cross-entropy loss.
+
+\subsection{Model Architecture Details}
+
+The baseline classifier is a compact 1D convolutional network inspired by the
+architecture used in \textit{``Data Augmentation for Electrocardiograms''}.
+Given an input heartbeat $x \in \mathbb{R}^{187}$, the network first applies a
+convolutional layer to extract local temporal patterns:
+\[
+h_1 = \mathrm{ReLU}(\mathrm{Conv1D}(x)).
+\]
+
+A max-pooling layer reduces temporal resolution while preserving the strongest
+activations:
+\[
+h_2 = \mathrm{MaxPool}(h_1).
+\]
+
+A second convolutional block extracts higher-level morphological features such
+as QRS width and ST deviations:
+\[
+h_3 = \mathrm{ReLU}(\mathrm{Conv1D}(h_2)).
+\]
+
+Following another pooling layer, the representation is flattened and passed to
+fully connected layers:
+\[
+z = \mathrm{FC}(\mathrm{flatten}(h_3)).
+\]
+
+The final softmax layer outputs predicted class probabilities:
+\[
+\hat{y} = \mathrm{softmax}(Wz + b).
+\]
+
+This model is intentionally lightweight (under 100K parameters) to match the
+computational budget of the original work and to focus analysis on the effects
+of augmentation rather than model capacity.
+
+\subsection{Training Details}
+Hyperparameters:
+
+\begin{itemize}
+    \item Batch size: 256
+    \item Dropout: 0.2
+    \item Epochs: 20 (baseline), 5 (augmentation experiments)
+\end{itemize}
+
+Each augmentation is applied only to the training set.
+
+\subsection{Computational Requirements}
+
+All experiments were run in Google Colab using an NVIDIA T4 GPU.
+The baseline model required approximately 5–7 seconds per epoch,
+and the full 20-epoch training completed in about 3 minutes. Each
+augmentation experiment ran for 5 epochs and took roughly 1 minute
+per configuration. Total GPU time for all experiments was
+approximately 15–18 minutes. Memory usage remained under 2 GB,
+reflecting the compact size of the 1D CNN architecture.
+
+\subsection{Evaluation Metrics}
+We follow the paper in using accuracy as the primary evaluation metric for all
+experiments. We compute accuracy on the validation and test sets at the end of
+each epoch, and additionally track loss curves to examine convergence behavior.
+
+\paragraph{Accuracy.}
+Accuracy is defined as the fraction of correctly predicted labels out of all
+samples. For a multiclass classifier with predicted labels $\hat{y}$ and true
+labels $y$, accuracy is computed as:
+\[
+\text{Accuracy} = \frac{1}{N} \sum_{i=1}^{N} \mathbf{1}[\hat{y}_i = y_i].
+\]
+Because the MIT-BIH dataset is moderately imbalanced, accuracy must be
+interpreted with this imbalance in mind. However, since our augmentations are
+applied uniformly across classes, accuracy remains a meaningful comparison
+metric.
+
+\paragraph{Loss Function.}
+We use cross-entropy loss, commonly used in multiclass classification:
+\[
+\mathcal{L} = -\sum_{c=1}^{C} y_{ic} \log p_{ic},
+\]
+where $p_{ic}$ is the model's predicted probability for class $c$. Loss is
+tracked on both the training and validation sets. Loss curves help diagnose
+whether augmentations improve stability or lead to over-regularization.
+
+\paragraph{Epoch-Level Evaluation.}
+After each epoch we compute:
+\begin{itemize}
+    \item training loss and accuracy
+    \item validation loss and accuracy
+    \item test accuracy (for overall comparison of augmentations)
+\end{itemize}
+This allows us to compare convergence speeds and generalization trends across
+augmentation settings.
+
+\paragraph{Augmentation Comparison.}
+For augmentation experiments, we report:
+\begin{itemize}
+    \item best validation accuracy
+    \item best test accuracy
+\end{itemize}
+This matches the reporting style of the original paper and allows fair
+comparison across augmentation strengths.
+
+\subsubsection{LLM Assistance for Training and Evaluation}
+
+To implement the training loop, the following initial prompt was used:
+
+\textit{``Write a PyTorch training loop with accuracy and loss tracking for train, validation, and test sets.''}
+
+The LLM generated a correct structure including zero-gradient clearing,
+backpropagation, and accuracy computation. Only minor adjustments were
+needed, such as adding history logging and returning per-epoch metrics.
+
+For evaluation, the prompt used was:
+
+\textit{``Provide PyTorch code to compute accuracy and loss for a classification model.''}
+
+The generated code aligned well with standard practices. Across both
+components, only 2–3 refinement prompts were needed.
+
+% ---------------------------
+\section{Results}
+
+\subsection{Baseline Reproduction}
+
+We successfully reproduced the baseline CNN metrics:
+
+\begin{itemize}
+    \item \textbf{Train Accuracy:} 0.985
+    \item \textbf{Validation Accuracy:} 0.984
+    \item \textbf{Test Accuracy:} 0.9815
+\end{itemize}
+
+\begin{table}[t]
+\centering
+\begin{tabular}{lcc}
+\hline
+\textbf{Model} & \textbf{Test Loss} & \textbf{Test Accuracy} \\
+\hline
+Baseline CNN & 0.0804 & 0.9815 \\
+\hline
+\end{tabular}
+\caption{Reproduced baseline performance on MIT-BIH.}
+\label{tab:baseline-results}
+\end{table}
+
+\subsection{Baseline Training Curves}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\linewidth]{figures/loss_curves.png}
+\caption{Training and validation loss across 20 epochs for the baseline CNN model.}
+\label{fig:loss-curves}
+\end{figure}
+
+The baseline loss curves show stable convergence with minimal overfitting.
+Validation loss consistently tracks training loss, indicating that the model
+generalizes well without augmentation.
+
+\subsection{Augmentation Experiments}
+
+We experimented with six augmentation configurations:
+
+\begin{itemize}
+    \item baseline (no augmentation)
+    \item jitter
+    \item scaling
+    \item jitter + scaling
+    \item time warp
+    \item magnitude warp
+\end{itemize}
+
+\subsection{Description of Augmentation Methods}
+
+\textbf{Jitter.} Adds small Gaussian noise to each ECG point. This simulates sensor noise and improves robustness.
+
+\textbf{Scaling.} Multiplies the waveform by a random factor. This models amplitude variation between patients.
+
+\textbf{Time Warp.} Non-linearly stretches or compresses portions of the signal. This can mimic variability in heart-rate timing.
+
+\textbf{Magnitude Warp.} Smoothly distorts the amplitude using a spline curve. This can model gradual morphological variations.
+
+\textbf{Permutation.} Breaks the signal into segments and shuffles their order. More common in non-ECG time-series but included for analysis.
+
+\textbf{Jitter+Scaling.} A combined augmentation used frequently in prior literature.
+
+\subsection{Augmentation Experiment Results}
+
+We compare all augmentation methods and summarize the results in 
+Figure~\ref{fig:aug-comparison}.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\linewidth]{figures/aug_comparison.png}
+\caption{Comparison of augmentation methods on MIT-BIH.}
+\label{fig:aug-comparison}
+\end{figure}
+
+\subsection{Ablation Study: Final Experimental Results}
+
+To understand the individual contribution of each augmentation type, we
+summarize the best validation and test accuracies in Table~\ref{tab:ablation-results}.
+
+\begin{table}[t]
+\centering
+\begin{tabular}{lcc}
+\hline
+\textbf{Augmentation} & \textbf{Best Val Acc} & \textbf{Best Test Acc} \\
+\hline
+Baseline       & 0.977 & 0.975 \\
+Jitter         & 0.977 & 0.974 \\
+Scaling        & 0.978 & 0.977 \\
+Jitter+Scaling & 0.974 & 0.973 \\
+Time Warp      & 0.826 & 0.828 \\
+Magnitude Warp & 0.977 & 0.976 \\
+\hline
+\end{tabular}
+\caption{Summary of augmentation ablation results.
+Scaling and magnitude warp provide the strongest improvement, 
+while time warp significantly degrades accuracy.}
+\label{tab:ablation-results}
+\end{table}
+
+\subsection{Additional Ablation: Varying Jitter Strength}
+
+Beyond reproducing the augmentations in the paper, we performed an additional
+ablation by varying the jitter noise level. The original paper provides no
+explicit $\sigma$ values, so we tested:
+\[
+\sigma \in \{0.01, 0.03, 0.05, 0.10\}.
+\]
+
+We observed that very small jitter ($\sigma = 0.01$) produced only marginal
+benefit, moderate jitter ($\sigma = 0.03$) improved robustness, and strong
+jitter ($\sigma = 0.10$) distorted waveform morphology, degrading validation
+accuracy. This supports the hypothesis that ECG augmentation must remain
+physiologically plausible.
+
+A summary visualization is shown below (placeholder figure).
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\linewidth]{figures/jitter_ablation.png}
+\caption{Effect of jitter strength on validation accuracy (illustrative).}
+\end{figure}
+
+% ---------------------------
+\section{Discussion}
+
+\section{LLM Assistance Summary}
+
+Throughout this reproduction project, a large language model (ChatGPT) was used as an assistant for code generation, debugging, and summarization of the original paper. Below, we document the prompts used, the accuracy of the responses, and how the LLM contributed to different stages of the workflow.
+
+\subsection{Dataset and Preprocessing}
+\textbf{Initial prompt:} ``Explain how to load and preprocess the MIT-BIH Arrhythmia dataset for a CNN model.''\\
+\textbf{LLM output quality:} The response correctly identified the Kaggle CSV structure (187 features + 1 label) and suggested normalizing the signals and building a PyTorch Dataset class.\\
+\textbf{Validation:} The generated code required minor modifications (adding \texttt{unsqueeze(0)} for Conv1D).\\
+\textbf{Prompts used:} 2--3 follow-up prompts for fixing shape mismatches.
+
+\subsection{Model Implementation}
+\textbf{Initial prompt:} ``Write a simple 1D CNN for ECG classification similar to those used in augmentation papers.''\\
+\textbf{LLM output quality:} The architecture matched typical CNN baselines and produced working PyTorch code.\\
+\textbf{Validation:} The model trained successfully with high accuracy. Minor adjustments (dropout, kernel sizes) were applied.\\
+\textbf{Prompts used:} $\sim$4 prompts, mainly for refining the architecture.
+
+\subsection{Augmentation Functions}
+\textbf{Initial prompt:} ``Implement jitter, scaling, time-warp, magnitude-warp, and permutation augmentations for ECG signals.''\\
+\textbf{LLM output quality:} Jitter and scaling were fully correct. Time-warp and magnitude-warp required adjustments due to SciPy interpolation edge cases.\\
+\textbf{Validation:} After debugging interpolation boundaries, all augmentations worked.\\
+\textbf{Prompts used:} 5--6 iterative refinements.
+
+\subsection{Training Loop and Evaluation}
+\textbf{Initial prompt:} ``Write a PyTorch training loop with accuracy and loss tracking for train/val/test splits.''\\
+\textbf{LLM output quality:} The generated loop was correct and required no major changes.\\
+\textbf{Validation:} Metrics matched expected patterns and reproduced the original paper’s trends.\\
+\textbf{Prompts used:} 2 additional prompts to add logging and history tracking.
+
+\subsection{Figures, Tables, and Final Report}
+\textbf{Initial prompt:} ``Generate LaTeX sections for methodology, results tables, and augmentation comparison figures in AAAI format.''\\
+\textbf{LLM output quality:} The generated LaTeX code compiled without errors and integrated smoothly with Overleaf.\\
+\textbf{Validation:} Adjustments were made for page length and figure placement.\\
+\textbf{Prompts used:} $\sim$3 for formatting and refinement.
+
+Overall, the LLM responses were consistently helpful and significantly accelerated development. Most corrections involved minor formatting or adapting generated code to match the exact dataset shapes. The LLM never produced hallucinated APIs, and its guidance aligned with accepted practices in ECG signal classification.
+
+\subsection{Reproducibility Analysis}
+Most augmentation results closely match the trends reported in
+\textit{``Data Augmentation for Electrocardiograms''}:
+scaling and magnitude-warping lead to modest improvements,
+while jitter provides a small but consistent benefit.
+
+However, time-warping severely degraded performance in our reproduction (Test Acc $\approx 0.828$).  
+We suspect the transformation distorted ECG morphology too aggressively, erasing class-discriminative patterns.
+
+\subsection{What Was Easy}
+\begin{itemize}
+    \item Kaggle dataset loading (simple CSV format)
+    \item Implementing augmentations using NumPy/SciPy
+    \item Reproducing baseline CNN accuracy
+\end{itemize}
+
+\subsection{What Was Difficult}
+\begin{itemize}
+    \item Matching augmentation hyperparameters exactly (paper omits many details)
+    \item Consistent reproduction under Colab GPU variability
+    \item Ensuring augmentation does not excessively distort the signal
+\end{itemize}
+
+\subsection{Recommendations}
+\begin{itemize}
+    \item Authors should publish precise augmentation strengths ($\sigma$, knot count, shift amounts)
+    \item Provide reference implementation and seeds
+    \item Encourage modular, PyHealth-compatible pipelines
+\end{itemize}
+
+
+
+% ---------------------------
+\section{Author Contributions}
+This project was completed independently by Min Kue Kim.
+All coding, experimentation, and analysis were performed with LLM assistance for productivity.
+
+\bibliographystyle{aaai2026}
+\bibliography{reference}
+
+\end{document}
