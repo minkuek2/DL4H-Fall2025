@@ -28,32 +28,6 @@ augmentation paper by:
 
 ---
 
-## Repository Structure
-
----
-│
-├── data/                      # MIT-BIH CSV files (not included)
-│
-├── dataset.py                 # Custom PyTorch dataset loader
-├── augmentations.py           # All ECG augmentation functions
-├── model.py                   # Baseline 1D CNN implementation
-├── train.py             # Training / evaluation loops
-│
-├── 01_dataset_exploration.ipynb   # Data inspection + visualization
-├── 02_baseline_training.ipynb      # Baseline CNN reproduction
-├── 03_augmentation_experiments.ipynb # Augmentation experiments + ablations
-│
-├── results/
-│   ├── figures/
-│   │   ├── loss_curves.png
-│   │   ├── aug_comparison.png
-│   │   └── jitter_ablation.png
-│   └── metrics/*.json
-│
-└── report/
-├── main.tex               # Final AAAI-style reproduction report
-└── references.bib
-
 ## Dataset (MIT-BIH Arrhythmia)
 
 This project uses the Kaggle MIT-BIH Arrhythmia dataset:
